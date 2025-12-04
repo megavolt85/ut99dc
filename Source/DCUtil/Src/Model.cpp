@@ -132,26 +132,21 @@ static void CompressLightBitsRLE( TArray<BYTE>& LightBits )
 	ConvertMapPkg: Process .unr map packages to compress LightBits
 -----------------------------------------------------------------------------*/
 
-void FDCUtil::ConvertMapPkg( const FString& PkgPath, UPackage* Pkg )
+UBOOL FDCUtil::ConvertMapPkg( const FString& PkgPath, UPackage* Pkg )
 {
 	guard(ConvertMapPkg);
-	
+
 	printf( "Processing map package '%s'\n", Pkg->GetName() );
-	
+
 	// Record package size before processing for comparison
-	INT OldSize = appFSize( *PkgPath );
-	if( OldSize >= 0 && PackageSizeBefore.Find( Pkg ) == nullptr )
-	{
-		PackageSizeBefore.Add( Pkg, OldSize );
-	}
-	
+	INT OldSize = GFileManager->FileSize( *PkgPath );
 	// Explicitly load the "MyLevel" ULevel object from the package
 	// This ensures all level data is loaded, especially on Dreamcast where lazy loading is used
-	ULevel* Level = LoadObject<ULevel>( Pkg, "MyLevel", nullptr, LOAD_NoFail | LOAD_KeepImports, nullptr );
+	ULevel* Level = LoadObject<ULevel>( Pkg, "MyLevel", nullptr, LOAD_NoFail, nullptr );
 	if( !Level )
 	{
 		printf( "  WARNING: Could not load MyLevel from package '%s'\n", Pkg->GetName() );
-		return;
+		return false;
 	}
 	
 	// Force load the Level's Model to ensure it's fully loaded
@@ -257,227 +252,14 @@ void FDCUtil::ConvertMapPkg( const FString& PkgPath, UPackage* Pkg )
 		printf( "Total LightBits compression: %u -> %u bytes (%.1f%% reduction)\n",
 			TotalOriginalSize, TotalCompressedSize,
 			100.0f * (1.0f - (FLOAT)TotalCompressedSize / (FLOAT)TotalOriginalSize) );
-		ChangedPackages.Add( PkgPath, Pkg );
+		return true;
 	}
 		else if( TotalOriginalSize > 0 )
 	{
 		printf( "No beneficial compression found for LightBits in '%s'\n", Pkg->GetName() );
 	}
-	
+
 	unguard;
-}
-
-/*-----------------------------------------------------------------------------
-	AnalyzeBSPStructures: Analyze BSP data structures for compression opportunities
------------------------------------------------------------------------------*/
-
-void FDCUtil::AnalyzeBSPStructures( UModel* Model, DWORD& OutTotalSize, DWORD& OutSavings, UBOOL& OutCanCompress )
-{
-	guard(AnalyzeBSPStructures);
-	
-	OutTotalSize = 0;
-	OutSavings = 0;
-	OutCanCompress = false;
-	
-	if( !Model )
-		return;
-	
-	// Don't print per-model analysis - aggregate for map summary
-	
-	// Skip BSP Nodes - already compressed for Dreamcast
-	
-	// Analyze BSP Surfaces
-	if( Model->Surfs && Model->Surfs->GetData() && Model->Surfs->Num() > 0 )
-	{
-		INT SurfCount = Model->Surfs->Num();
-		DWORD TotalSurfSize = SurfCount * sizeof(FBspSurf);
-		
-		// Check index ranges
-		INT MaxPBase = 0, MaxVNormal = 0, MaxVTextureU = 0, MaxVTextureV = 0;
-		INT MaxILightMap = 0, MaxIBrushPoly = 0;
-		
-		for( INT i = 0; i < SurfCount; i++ )
-		{
-			FBspSurf& Surf = Model->Surfs->Element(i);
-			if( Surf.pBase > MaxPBase ) MaxPBase = Surf.pBase;
-			if( Surf.vNormal > MaxVNormal ) MaxVNormal = Surf.vNormal;
-			if( Surf.vTextureU > MaxVTextureU ) MaxVTextureU = Surf.vTextureU;
-			if( Surf.vTextureV > MaxVTextureV ) MaxVTextureV = Surf.vTextureV;
-			if( Surf.iLightMap > MaxILightMap ) MaxILightMap = Surf.iLightMap;
-			if( Surf.iBrushPoly > MaxIBrushPoly ) MaxIBrushPoly = Surf.iBrushPoly;
-		}
-		
-		// Check compression opportunities
-		UBOOL CanUseSWORD = (MaxPBase <= 32767 && MaxVNormal <= 32767 && 
-		                     MaxVTextureU <= 32767 && MaxVTextureV <= 32767 &&
-		                     MaxILightMap <= 32767 && MaxIBrushPoly <= 32767);
-		UBOOL CanUseWORD = (MaxPBase <= 65535 && MaxVNormal <= 65535);
-		
-		if( CanUseSWORD )
-		{
-			DWORD SavedBytes = SurfCount * 6 * 2; // 6 INT fields -> SWORD = 2 bytes saved each
-			OutSavings += SavedBytes;
-			OutCanCompress = true;
-		}
-		else if( CanUseWORD )
-		{
-			DWORD SavedBytes = SurfCount * 2 * 2; // 2 INT fields -> WORD = 2 bytes saved each
-			OutSavings += SavedBytes;
-			OutCanCompress = true;
-		}
-		OutTotalSize += TotalSurfSize;
-	}
-	
-	// Analyze Vectors (skip if data not accessible - UVectors may have special layout)
-	if( Model->Vectors && Model->Vectors->GetData() && Model->Vectors->Num() > 0 )
-	{
-		INT VectorCount = Model->Vectors->Num();
-		DWORD TotalVectorSize = VectorCount * sizeof(FVector);
-		OutTotalSize += TotalVectorSize;
-		
-		// Skip compression analysis for Vectors - UVectors may have special memory layout
-		// that causes issues when accessing Element() on Dreamcast
-	}
-	
-	// Analyze Points (skip on Dreamcast - UVectors may have special memory layout)
-	// Just count the size, don't try to analyze compression opportunities
-	if( Model->Points && Model->Points->Num() > 0 )
-	{
-		INT PointCount = Model->Points->Num();
-		DWORD TotalPointSize = PointCount * sizeof(FVector);
-		OutTotalSize += TotalPointSize;
-		// Skip compression analysis for Points - UVectors may have special memory layout
-		// that causes issues when accessing Element()
-	}
-	
-	// Skip Verts analysis
-	
-	// Add Nodes size to total
-	if( Model->Nodes ) 
-		OutTotalSize += Model->Nodes->Num() * sizeof(FBspNode);
-	
-	unguard;
-}
-
-/*-----------------------------------------------------------------------------
-	AnalyzeMaps: Analyze map packages for BSP compression opportunities
------------------------------------------------------------------------------*/
-
-// Summary structure for map analysis
-struct FMapAnalysisSummary
-{
-	FString MapName;
-	DWORD TotalSize;
-	DWORD PotentialSavings;
-	UBOOL CanCompress;
-};
-
-void FDCUtil::AnalyzeMaps( const char* MapDir )
-{
-	guard(AnalyzeMaps);
-	
-	printf( "Analyzing maps in '%s' for BSP compression opportunities...\n\n", MapDir );
-	
-	// Load all .unr files in the directory
-	char Pattern[2048];
-	snprintf( Pattern, sizeof(Pattern), "%s/*.unr", MapDir );
-	
-	TArray<FString> Files = appFindFiles( Pattern );
-	
-	if( Files.Num() == 0 )
-	{
-		printf( "No .unr files found in '%s'\n", MapDir );
-		return;
-	}
-	
-	printf( "Found %d map files\n\n", Files.Num() );
-	
-	// Collect summary data
-	TArray<FMapAnalysisSummary> Summary;
-	
-	// Analyze each map
-	for( INT i = 0; i < Files.Num(); i++ )
-	{
-		char FullPath[2048];
-		snprintf( FullPath, sizeof(FullPath), "%s/%s", MapDir, *Files(i) );
-		
-		UPackage* Pkg = Cast<UPackage>( GObj.LoadPackage( nullptr, FullPath, LOAD_KeepImports ) );
-		if( !Pkg )
-		{
-			printf( "Failed to load: %s\n", FullPath );
-			continue;
-		}
-		
-		FMapAnalysisSummary MapSummary;
-		MapSummary.MapName = Files(i);
-		MapSummary.TotalSize = 0;
-		MapSummary.PotentialSavings = 0;
-		MapSummary.CanCompress = false;
-		
-		// Load the level and analyze all models in the package
-		ULevel* Level = LoadObject<ULevel>( Pkg, "MyLevel", nullptr, LOAD_NoFail | LOAD_KeepImports, nullptr );
-		
-		// Analyze all UModel objects in the package (main level + brush models)
-		// Use try-catch to handle any memory access issues
-		try
-		{
-			for( TObjectIterator<UModel> It; It; ++It )
-			{
-				UModel* Model = *It;
-				
-				if( !Model || !Model->IsIn( Pkg ) )
-					continue;
-				
-				DWORD ModelSize = 0, ModelSavings = 0;
-				UBOOL ModelCanCompress = false;
-				AnalyzeBSPStructures( Model, ModelSize, ModelSavings, ModelCanCompress );
-				MapSummary.TotalSize += ModelSize;
-				MapSummary.PotentialSavings += ModelSavings;
-				if( ModelCanCompress ) MapSummary.CanCompress = true;
-			}
-		}
-		catch( char* Error )
-		{
-			printf( "  ERROR analyzing models in '%s': %s\n", *Files(i), Error ? Error : "Unknown error" );
-		}
-		
-		Summary.AddItem( MapSummary );
-		
-		// Reset loaders to free memory and avoid double-free issues
-		GObj.ResetLoaders( Pkg );
-	}
-	
-	// Print summary
-	printf( "\n" );
-	printf( "================================================================================\n" );
-	printf( "SUMMARY: BSP Compression Analysis\n" );
-	printf( "================================================================================\n" );
-	printf( "%-30s %12s %12s %10s %12s\n", "Map Name", "Size (bytes)", "Savings", "Compress?", "Reduction %" );
-	printf( "--------------------------------------------------------------------------------\n" );
-	
-	DWORD GrandTotalSize = 0;
-	DWORD GrandTotalSavings = 0;
-	
-	for( INT i = 0; i < Summary.Num(); i++ )
-	{
-		FMapAnalysisSummary& S = Summary(i);
-		GrandTotalSize += S.TotalSize;
-		GrandTotalSavings += S.PotentialSavings;
-		
-		FLOAT ReductionPercent = S.TotalSize > 0 ? (100.0f * S.PotentialSavings / S.TotalSize) : 0.0f;
-		const char* CompressStr = S.CanCompress ? "YES" : "NO";
-		
-		printf( "%-30s %12u %12u %10s %11.1f%%\n", 
-			*S.MapName, S.TotalSize, S.PotentialSavings, CompressStr, ReductionPercent );
-	}
-	
-	printf( "--------------------------------------------------------------------------------\n" );
-	printf( "%-30s %12u %12u %10s %11.1f%%\n", 
-		"TOTAL", GrandTotalSize, GrandTotalSavings, 
-		GrandTotalSavings > 0 ? "YES" : "NO",
-		GrandTotalSize > 0 ? (100.0f * GrandTotalSavings / GrandTotalSize) : 0.0f );
-	printf( "================================================================================\n" );
-	
-	unguard;
+	return false;
 }
 

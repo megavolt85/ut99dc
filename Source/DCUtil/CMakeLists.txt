@@ -4,6 +4,8 @@ set(SRC_FILES
   "Src/Main.cpp"
   "Src/Texture.cpp"
   "Src/Sound.cpp"
+  "Src/Mesh.cpp"
+  "Src/Model.cpp"
 )
 
 add_executable(${PROJECT_NAME} ${SRC_FILES})

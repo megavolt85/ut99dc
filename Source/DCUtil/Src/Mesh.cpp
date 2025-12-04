@@ -53,7 +53,8 @@ static void ReduceFramesBetween( const UMesh* Mesh, INT StartFrame, INT EndFrame
 	{
 		for( INT FrameIndex = StartFrame + 1; FrameIndex < EndFrame; ++FrameIndex )
 		{
-			KeepFlags(FrameIndex) = 1;
+			if( KeepFlags.IsValidIndex(FrameIndex) )
+				KeepFlags(FrameIndex) = 1;
 		}
 		return;
 	}
@@ -69,9 +70,16 @@ static void ReduceFramesBetween( const UMesh* Mesh, INT StartFrame, INT EndFrame
 
 		for( INT VertIndex = 0; VertIndex < FrameVerts; ++VertIndex )
 		{
-			const FVector StartPos = Mesh->Verts( StartFrame * FrameVerts + VertIndex ).Vector();
-			const FVector EndPos = Mesh->Verts( EndFrame * FrameVerts + VertIndex ).Vector();
-			const FVector ActualPos = Mesh->Verts( FrameIndex * FrameVerts + VertIndex ).Vector();
+			const INT StartVertIndex = StartFrame * FrameVerts + VertIndex;
+			const INT EndVertIndex = EndFrame * FrameVerts + VertIndex;
+			const INT ActualVertIndex = FrameIndex * FrameVerts + VertIndex;
+
+			if( !Mesh->Verts.IsValidIndex(StartVertIndex) || !Mesh->Verts.IsValidIndex(EndVertIndex) || !Mesh->Verts.IsValidIndex(ActualVertIndex) )
+				continue;
+
+			const FVector StartPos = Mesh->Verts( StartVertIndex ).Vector();
+			const FVector EndPos = Mesh->Verts( EndVertIndex ).Vector();
+			const FVector ActualPos = Mesh->Verts( ActualVertIndex ).Vector();
 			const FVector ExpectedPos = StartPos + (EndPos - StartPos) * Alpha;
 			const FLOAT ErrorSq = (ActualPos - ExpectedPos).SizeSquared();
 			const FLOAT AllowSq = (PerVertexToleranceSq && PerVertexToleranceSq->IsValidIndex( VertIndex ))
@@ -99,7 +107,8 @@ static void ReduceFramesBetween( const UMesh* Mesh, INT StartFrame, INT EndFrame
 
 	if( MaxError > BaseToleranceSq )
 	{
-		KeepFlags( BestIndex ) = 1;
+		if( KeepFlags.IsValidIndex(BestIndex) )
+			KeepFlags( BestIndex ) = 1;
 		ReduceFramesBetween( Mesh, StartFrame, BestIndex, BaseToleranceSq, PerVertexToleranceSq, KeepFlags );
 		ReduceFramesBetween( Mesh, BestIndex, EndFrame, BaseToleranceSq, PerVertexToleranceSq, KeepFlags );
 	}
@@ -361,7 +370,9 @@ static void RebuildConnectivity( UMesh* Mesh )
 		return;
 	}
 
-	Mesh->Connects.SetNum( Mesh->FrameVerts );
+	Mesh->Connects.Empty();
+	for( INT i = 0; i < Mesh->FrameVerts; i++ )
+		Mesh->Connects.Add();
 	Mesh->VertLinks.Empty();
 
 	for( INT VertIndex = 0; VertIndex < Mesh->FrameVerts; ++VertIndex )
@@ -392,8 +403,13 @@ static void RebuildBounds( UMesh* Mesh )
 		return;
 	}
 
-	Mesh->BoundingBoxes.SetNum( Mesh->AnimFrames );
-	Mesh->BoundingSpheres.SetNum( Mesh->AnimFrames );
+	Mesh->BoundingBoxes.Empty();
+	Mesh->BoundingSpheres.Empty();
+	for( INT i = 0; i < Mesh->AnimFrames; i++ )
+	{
+		Mesh->BoundingBoxes.AddItem(FBox());
+		Mesh->BoundingSpheres.AddItem(FSphere());
+	}
 
 	TArray<FVector> AllFrames;
 
@@ -409,12 +425,12 @@ static void RebuildBounds( UMesh* Mesh )
 			AllFrames.AddItem( Pos );
 		}
 
-		Mesh->BoundingBoxes( FrameIndex ) = FBox( FramePoints );
-		Mesh->BoundingSpheres( FrameIndex ) = FSphere( FramePoints );
+		Mesh->BoundingBoxes( FrameIndex ) = FBox( &FramePoints(0), FramePoints.Num() );
+		Mesh->BoundingSpheres( FrameIndex ) = FSphere( &FramePoints(0), FramePoints.Num() );
 	}
 
-	Mesh->BoundingBox = FBox( AllFrames );
-	Mesh->BoundingSphere = FSphere( AllFrames );
+	Mesh->BoundingBox = FBox( &AllFrames(0), AllFrames.Num() );
+	Mesh->BoundingSphere = FSphere( &AllFrames(0), AllFrames.Num() );
 }
 
 static UBOOL ReduceVertices( UMesh* Mesh, const FMeshReducer::FOptions& Options, FLOAT PositionTolerance, INT UVTolerance, FLOAT CosNormalTolerance );
@@ -513,7 +529,9 @@ static UBOOL ReduceVertices( UMesh* Mesh, const FMeshReducer::FOptions& Options,
 		}
 	}
 
-	Mesh->Verts = NewVerts;
+	Mesh->Verts.Empty();
+	for( INT i = 0; i < NewVerts.Num(); i++ )
+		Mesh->Verts.AddItem( NewVerts(i) );
 	Mesh->FrameVerts = NewFrameVerts;
 
 	RebuildConnectivity( Mesh );
@@ -586,7 +604,9 @@ static UBOOL RemoveDuplicateTriangles( UMesh* Mesh )
 	if( NewTris.Num() == Mesh->Tris.Num() )
 		return 0;
 
-	Mesh->Tris = NewTris;
+	Mesh->Tris.Empty();
+	for( INT i = 0; i < NewTris.Num(); i++ )
+		Mesh->Tris.AddItem( NewTris(i) );
 	return 1;
 }
 static UBOOL ReduceKeyframes( UMesh* Mesh, FLOAT FrameTolerance, const TArray<FLOAT>* PerVertexToleranceSq )
@@ -724,7 +744,9 @@ static UBOOL ReduceKeyframes( UMesh* Mesh, FLOAT FrameTolerance, const TArray<FL
 	}
 
 	Mesh->AnimFrames = NewFrameCount;
-	Mesh->Verts = NewVerts;
+	Mesh->Verts.Empty();
+	for( INT i = 0; i < NewVerts.Num(); i++ )
+		Mesh->Verts.AddItem( NewVerts(i) );
 
 	RebuildBounds( Mesh );
 
@@ -769,8 +791,13 @@ UBOOL FMeshReducer::Reduce( UMesh* Mesh, const FOptions& Options, FMeshReduction
 	const FLOAT CosNormalTolerance = (Options.NormalAngleToleranceDeg > 0.0f)
 		? appCos( Options.NormalAngleToleranceDeg * (FLOAT)PI / 180.0f )
 		: -1.0f;
+#if 1
+	const UBOOL bReducedVertices = 0;
+	const UBOOL bRemovedTris = 0;
+#else
 	const UBOOL bReducedVertices = ReduceVertices( Mesh, Options, PositionToleranceUnits, UVToleranceValue, CosNormalTolerance );
 	const UBOOL bRemovedTris = RemoveDuplicateTriangles( Mesh );
+#endif
 
 	TArray<FLOAT> MotionScales;
 	TArray<FLOAT> PerVertexToleranceSq;

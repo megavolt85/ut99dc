@@ -141,12 +141,8 @@ void FDCUtil::LoadPackages( const char *Dir )
 				appErrorf(  "Package '%s' does not exist", Temp );
 
 			FString PackageName(Temp);
-			LoadedPackageNames.AddItem( PackageName );
-			LoadedPackagePtrs.AddItem( Pkg );
-			if( ULinkerLoad* Linker = UObject::GetPackageLinker( Pkg, nullptr, 0, nullptr, nullptr ) )
-			{
-				PackageGuids.AddItem( Linker->Summary.Guid );
-			}
+			LoadedPackageNames.Add( PackageName );
+			LoadedPackagePtrs.Add( Pkg );
 		}
 	}
 	else
@@ -154,10 +150,8 @@ void FDCUtil::LoadPackages( const char *Dir )
 		UPackage* Pkg = Cast<UPackage>( UObject::LoadPackage( nullptr, Path, 0 ) );
 		if( !Pkg )
 			appErrorf(  "Package '%s' does not exist", Path );
-		LoadedPackageNames.AddItem( FString(Path) );
-		LoadedPackagePtrs.AddItem( Pkg );
-		if( ULinkerLoad* Linker = UObject::GetPackageLinker( Pkg, nullptr, 0, nullptr, nullptr ) )
-			PackageGuids.AddItem( Linker->Summary.Guid );
+		LoadedPackageNames.Add( FString(Path) );
+		LoadedPackagePtrs.Add( Pkg );
 	}
 
 	unguard;
@@ -317,63 +311,121 @@ UBOOL FDCUtil::ConvertMusicPkg(const FString &PkgPath, UPackage *Pkg)
 	unguard;
 }
 
-UBOOL FDCUtil::ConvertMeshPkg( const FString& PkgPath, UPackage* Pkg, const FMeshReducer::FOptions& Options )
+UBOOL FDCUtil::ConvertMeshPkg( const FString& PkgPath, UPackage* Pkg )
 {
-#if 0
 	guard(ConvertMeshPkg);
 
-	printf( "Optimizing meshes in '%s'\n", Pkg->GetName() );
+	printf( "Analyzing meshes in '%s'\n", Pkg->GetName() );
 
-	UBOOL Changed = false;
-
+	// Get all meshes in this package first to avoid lazy loader issues with TObjectIterator
+	TArray<UMesh*> PackageMeshes;
 	for( TObjectIterator<UMesh> It; It; ++It )
 	{
-		if( !It->IsIn( Pkg ) )
-		{
-			continue;
-		}
+		if( It->IsIn( Pkg ) )
+			PackageMeshes.AddItem( *It );
+	}
 
-		FMeshReductionStats Stats;
-		const UBOOL MeshChanged = FMeshReducer::Reduce( *It, Options, &Stats );
+	UBOOL Changed = false;
+	for( INT i = 0; i < PackageMeshes.Num(); i++ )
+	{
+		UMesh* Mesh = PackageMeshes(i);
 
-		if( MeshChanged )
+
+		Mesh->Verts.Num();  // Load vertices
+		Mesh->Tris.Num();   // Load triangles
+		Mesh->Connects.Num(); // Load connectivity
+
+		// Check if this is one of biggest meshes to nuke
+		FString MeshName = Mesh->GetName();
+		UBOOL ShouldNuke = (MeshName == TEXT("FCommando") ||
+						   MeshName == TEXT("SGirl") ||
+						   MeshName == TEXT("Commando") ||
+						   MeshName == TEXT("Boss") ||
+						   MeshName == TEXT("TrophyMale1") ||
+						   MeshName == TEXT("TrophyBoss") ||
+						   MeshName == TEXT("TrophyFemale1") ||
+						   MeshName == TEXT("TrophyFemale2") ||
+						   MeshName == TEXT("TrophyMale2"));
+
+		if (ShouldNuke)
 		{
-			Changed = true;
-			printf( "- %s: verts %d -> %d, tris %d -> %d, frames %d -> %d\n",
-				*Stats.MeshName,
-				Stats.OriginalVerts, Stats.ReducedVerts,
-				Stats.OriginalTriangles, Stats.ReducedTriangles,
-				Stats.OriginalFrames, Stats.ReducedFrames );
+			// Calculate old size before nuking
+			INT OldSize = 0;
+			for( INT j=0; j<Mesh->Tris.Num(); j++ ) OldSize += sizeof(FMeshTri);
+			for( INT j=0; j<Mesh->FrameVerts * Mesh->AnimFrames; j++ ) OldSize += sizeof(FMeshVert);
+
+
+			Mesh->Verts.Empty();
+			Mesh->Tris.Empty();
+			Mesh->Connects.Empty();
+			Mesh->FrameVerts = 0;
+			Mesh->AnimFrames = 0;
+			Mesh->AnimSeqs.Empty();
+
+			printf( "- %s: NUKED for Dreamcast (%d bytes saved)\n",
+				Mesh->GetName(), OldSize );
+
+			TotalPrevSize += OldSize;
+			TotalNewSize += 0; // Completely removed
+			Changed = true; // Mark that we made changes
 		}
 		else
 		{
-			printf( "- %s: no change (verts=%d, tris=%d, frames=%d)\n",
-				*Stats.MeshName,
-				Stats.OriginalVerts,
-				Stats.OriginalTriangles,
-				Stats.OriginalFrames );
-		}
-	}
+			// Calculate mesh size before reduction
+			INT OldSize = 0;
+			for( INT j=0; j<Mesh->Tris.Num(); j++ ) OldSize += sizeof(FMeshTri);
+			for( INT j=0; j<Mesh->FrameVerts * Mesh->AnimFrames; j++ ) OldSize += sizeof(FMeshVert);
 
-	if( Changed )
-	{
-		if( PackageSizeBefore.Find( Pkg ) == nullptr )
-		{
-			struct stat st;
-			INT OldSize = stat( TCHAR_TO_ANSI(*PkgPath), &st ) == 0 ? st.st_size : -1;
-			if( OldSize >= 0 )
+			// Apply mesh reduction for Dreamcast optimization (frames only)
+			FMeshReducer::FOptions ReduceOptions;
+			ReduceOptions.PositionTolerance = 0.01f;     // Conservative vertex reduction
+			ReduceOptions.NormalTolerance = 0.01f;       // Conservative vertex reduction
+			ReduceOptions.UVTolerance = 0.01f;           // Conservative vertex reduction
+			ReduceOptions.FrameErrorTolerance = 1.0f;     // Allow more frame error
+			ReduceOptions.MotionErrorScale = 1.0f;       // Allow more frame error
+			ReduceOptions.UVSnapGrid = 1.0f / 64.0f;
+			ReduceOptions.SeamPositionTolerance = 0.25f; // Allow frame error
+			ReduceOptions.SeamNormalAngleDeg = 15.0f;    // Allow frame error
+			ReduceOptions.UVToleranceBytes = 15.0f;      // Allow frame error
+			ReduceOptions.NormalAngleToleranceDeg = 15.0f; // Allow frame error
+			ReduceOptions.MaxMeshletVertices = 15.0f;    // Allow frame error
+
+
+			FMeshReductionStats Stats;
+			const UBOOL MeshReduced = FMeshReducer::Reduce( Mesh, ReduceOptions, &Stats );
+
+			// Calculate new size after reduction
+			INT NewSize = 0;
+			for( INT j=0; j<Mesh->Tris.Num(); j++ ) NewSize += sizeof(FMeshTri);
+			for( INT j=0; j<Mesh->FrameVerts * Mesh->AnimFrames; j++ ) NewSize += sizeof(FMeshVert);
+
+			if( MeshReduced )
 			{
-				// PackageSizeBefore( Pkg ) = OldSize;
+				printf( "- %s: REDUCED %d -> %d verts, %d -> %d tris, %d -> %d frames (%d -> %d bytes)\n",
+					Mesh->GetName(),
+					Stats.OriginalVerts, Stats.ReducedVerts,
+					Stats.OriginalTriangles, Stats.ReducedTriangles,
+					Stats.OriginalFrames, Stats.ReducedFrames,
+					OldSize, NewSize );
+
 				TotalPrevSize += OldSize;
+				TotalNewSize += NewSize;
+				Changed = true;
+			}
+			else
+			{
+				printf( "- %s: %d verts, %d tris, %d frames (%d bytes) - no reduction needed\n",
+					Mesh->GetName(), Mesh->FrameVerts, Mesh->Tris.Num(), Mesh->AnimFrames, OldSize );
+
+				TotalPrevSize += OldSize;
+				TotalNewSize += OldSize;
 			}
 		}
-
-		ChangedPackageNames.AddItem( PkgPath );
-		ChangedPackagePtrs.AddItem( Pkg );
 	}
 
+	return Changed;
 	unguard;
-#endif
+
 }
 
 void FDCUtil::CommitChanges( const FSimpleArray<FString>& ChangedNames, const FSimpleArray<UPackage*>& ChangedPtrs )
@@ -714,19 +766,27 @@ void FDCUtil::Main( )
 		}
 		CommitChanges( LocalChangedNames, LocalChangedPtrs );
 	}
-#if 0
 	else if( Parse( Cmd, "CVTUMH=", Temp, sizeof( Temp ) - 1 ) )
 	{
 		ParsePackageArg( Temp, "../System/*.u" );
-		FMeshReducer::FOptions MeshOptions;
+		FSimpleArray<FString> LocalChangedNames;
+		FSimpleArray<UPackage*> LocalChangedPtrs;
 		for( INT i = 0; i < LoadedPackageNames.Num(); ++i )
 		{
 			PkgPath = LoadedPackageNames(i);
 			Pkg = LoadedPackagePtrs(i);
-			ConvertMeshPkg( PkgPath, Pkg, MeshOptions );
+			if( ConvertMeshPkg( PkgPath, Pkg ) )
+			{
+				LocalChangedNames.Add(PkgPath);
+				LocalChangedPtrs.Add(Pkg);
+			}
 		}
-		CommitChanges();
+		if( LocalChangedNames.Num() > 0 )
+		{
+			CommitChanges( LocalChangedNames, LocalChangedPtrs );
+		}
 	}
+#if 0
 	else if( Parse( Cmd, "CVTALL=", Temp, sizeof( Temp ) - 1 ) )
 	{
 		if( Temp[0] == '*' && Temp[0] == 0 )
@@ -752,19 +812,27 @@ void FDCUtil::Main( )
 		}
 		CommitChanges();
 	}
+#endif
 	else if( Parse( Cmd, "CVTUNR=", Temp, sizeof( Temp ) - 1 ) )
 	{
 		ParsePackageArg( Temp, "../Maps/*.unr" );
-		printf( "Loaded %d map packages\n", LoadedPackageNames.Num() );
+		FSimpleArray<FString> LocalChangedNames;
+		FSimpleArray<UPackage*> LocalChangedPtrs;
 		for( INT i = 0; i < LoadedPackageNames.Num(); ++i )
 		{
-			PkgPath = LoadedPackageNames(i);
-			Pkg = LoadedPackagePtrs(i);
-			ConvertMapPkg( PkgPath, Pkg );
+			FString PkgPath = LoadedPackageNames(i);
+			UPackage* Pkg = LoadedPackagePtrs(i);
+			if( ConvertMapPkg( PkgPath, Pkg ) )
+			{
+				LocalChangedNames.Add(PkgPath);
+				LocalChangedPtrs.Add(Pkg);
+			}
 		}
-		CommitChanges();
+		if( LocalChangedNames.Num() > 0 )
+		{
+			CommitChanges( LocalChangedNames, LocalChangedPtrs );
+		}
 	}
-#endif
 	else
 	{
 		printf( "Usage: dctool CVTUTX=<TEXPKG> | CVTUAX=<SOUNDPKG> | CVTUMX=<MUSPKG> | CVTUMH=<UMESHPKG> | CVTUNR=<MAPPKG>\n" );

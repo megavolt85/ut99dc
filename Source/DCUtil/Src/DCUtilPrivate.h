@@ -70,15 +70,15 @@ private:
 	UBOOL ConvertTexturePkg( const FString& PkgPath, UPackage* Pkg );
 	UBOOL ConvertSoundPkg( const FString& PkgPath, UPackage* Pkg );
 	UBOOL ConvertMusicPkg( const FString& PkgPath, UPackage* Pkg );
-	UBOOL ConvertMeshPkg( const FString& PkgPath, UPackage* Pkg, const FMeshReducer::FOptions& Options );
-	void ConvertMapPkg( const FString& PkgPath, UPackage* Pkg );
+	UBOOL ConvertMeshPkg( const FString& PkgPath, UPackage* Pkg );
+	UBOOL ConvertMapPkg( const FString& PkgPath, UPackage* Pkg );
 	void CommitChanges();
 	void CommitChanges( const FSimpleArray<FString>& ChangedNames, const FSimpleArray<UPackage*>& ChangedPtrs );
 
 private:
 	UEngine* Engine = nullptr;
-	TArray<FString> LoadedPackageNames;
-	TArray<UPackage*> LoadedPackagePtrs;
+	FSimpleArray<FString> LoadedPackageNames;
+	FSimpleArray<UPackage*> LoadedPackagePtrs;
 	FSimpleArray<FString> ChangedPackageNames;
 	FSimpleArray<UPackage*> ChangedPackagePtrs;
 	TArray<FGuid> PackageGuids;
