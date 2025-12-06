@@ -167,6 +167,11 @@ void UGameEngine::Init()
 		if( !LoadMap( FURL(TEXT("Entry")), NULL, NULL, Error ) )
 			appErrorf( LocalizeError("FailedBrowse"), TEXT("Entry"), *Error );
 		Exchange( GLevel, GEntry );
+#ifdef PLATFORM_LOW_MEMORY
+		// Purge unused objects and flush caches.
+		Flush(1);
+		UObject::CollectGarbage( RF_Native );
+#endif
 	}
 
 	// Create default URL.

@@ -314,7 +314,19 @@ static void SerializeMips( UTexture* Texture, FArchive& Ar, TArray<FMipmap>& Mip
 			if( i<LOD )
 				GLazyLoad = 1;
 #endif
-			Ar << *new(Mips)FMipmap;
+			FMipmap* NewMip = new(Mips)FMipmap;
+			Ar << *NewMip;
+
+			// On Dreamcast, empty mip data after loading to save RAM
+			// Skip scripted textures which need their data for dynamic updates
+#ifdef PLATFORM_DREAMCAST
+			if( !GLazyLoad && NewMip->DataArray.Num() > 0 && Texture && !Texture->IsA(UScriptedTexture::StaticClass()) )
+			{
+				NewMip->DataArray.Empty();
+				NewMip->DataPtr = NULL;
+			}
+#endif
+
 			GLazyLoad = SavedLazyLoad;
 		}
 	}

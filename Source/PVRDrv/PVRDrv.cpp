@@ -325,6 +325,7 @@ UBOOL UPVRRenderDevice::Init( UViewport* InViewport, INT NewX, INT NewY, INT New
 
 	// if we were using fb dbgio, disable it before initializing PVR
 	const char* DbgDev = dbgio_dev_get();
+
 	if( DbgDev && !appStrcmp( DbgDev, "fb" ) )
 	{
 		// try to drop back to whatever we had at startup first
@@ -1152,6 +1153,19 @@ void UPVRRenderDevice::SetTexture( FTextureInfo& Info, DWORD PolyFlags, FLOAT Pa
 		Bind->LastType = NewType;
 		Info.bRealtimeChanged = 0;
 		UploadTexture( Info, NewTexture );
+
+		//free system RAM copy after uploading to VRAM to save memory
+#ifdef PLATFORM_DREAMCAST
+		if( Info.Mips[0] && Info.Texture && !Info.Texture->IsA(UScriptedTexture::StaticClass()) )
+		{
+			FMipmap* Mip0 = static_cast<FMipmap*>(Info.Mips[0]);
+			if( Mip0->DataArray.Num() > 0 )
+			{
+				Mip0->DataArray.Empty();
+				Mip0->DataPtr = NULL;
+			}
+		}
+#endif
 	}
 
 	unguard;

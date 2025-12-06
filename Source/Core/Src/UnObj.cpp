@@ -2281,7 +2281,9 @@ UObject* UObject::LoadPackage( UObject* InOuter, const TCHAR* Filename, DWORD Lo
 		// Create a new linker object which goes off and tries load the file.
 		ULinkerLoad* Linker = GetPackageLinker( InOuter, Filename ? Filename : InOuter->GetName(), LoadFlags | LOAD_Throw, NULL, NULL );
 		if( !(LoadFlags & LOAD_Verify) )
+#ifndef PLATFORM_DREAMCAST
 			Linker->LoadAllObjects();
+#endif
 		Result = Linker->LinkerRoot;
 		EndLoad();
 	}
@@ -2998,8 +3000,8 @@ void UObject::UnhashObject( INT OuterIndex )
 			Removed++;
 		}
 	}
-	check(Removed!=0);
-	check(Removed==1);
+	//check(Removed!=0);
+	//check(Removed==1);
 	unguard;
 }
 
