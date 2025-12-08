@@ -256,8 +256,19 @@ void FCollisionHash::RemoveActor( AActor* Actor )
 	check(Actor->bCollideActors);
 	if( Actor->bDeleteMe )
 		return;
+#ifdef PLATFORM_DREAMCAST
+	UBOOL bAdjustedLocation = 0;
+	FVector SavedLocation = Actor->Location;
+	if( Actor->Location!=Actor->ColLocation )
+	{
+		debugf( NAME_Warning, TEXT("%s moved without proper hashing, correcting"), Actor->GetFullName() );
+		Actor->Location = Actor->ColLocation;
+		bAdjustedLocation = 1;
+	}
+#else
 	if( Actor->Location!=Actor->ColLocation )
 		appErrorf( TEXT("%s moved without proper hashing"), Actor->GetFullName() );
+#endif
 
 	// Remove actor.
 	INT X0,Y0,Z0,X1,Y1,Z1;
@@ -289,6 +300,14 @@ void FCollisionHash::RemoveActor( AActor* Actor )
 		}
 	}
 	CheckActorNotReferenced( Actor );
+#ifdef PLATFORM_DREAMCAST
+	if( bAdjustedLocation )
+	{
+		// Restore actor transform and update collision location to current to keep hash consistent.
+		Actor->Location    = SavedLocation;
+		Actor->ColLocation = SavedLocation;
+	}
+#endif
 	unguard;
 }
 
